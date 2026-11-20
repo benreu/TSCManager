@@ -7,18 +7,37 @@ It is a companion to [LinuxZPL](../LinuxZPL), kept apart from it so that
 LinuxZPL stays a ZPL designer. The printer connection code (network and USB)
 was copied from LinuxZPL at commit 5e99b57.
 
-**Status:** the Qt window works; the GTK window comes next.
+Two windows sit on one core: GTK 3 and PySide2/Qt 5. They have the same
+rows, buttons and messages (`tests/test_conformance.py` holds them to it);
+which one opens is only a question of which toolkit is installed, or which
+you prefer.
 
 Checked on a TSC MB241 (firmware 1.28.002) on the network: TrueType
-fonts, black-and-white and grayscale BMPs and PNGs store, list, print and
-delete as they should.
+fonts, black-and-white and grayscale BMPs and PNGs store, list, print,
+move and delete as they should.
+
+## Installing
+
+It needs Python 3.8 or later, Pillow, and one of the two toolkits. On
+Debian, Ubuntu or Mint:
+
+    sudo apt install python3-pil
+    sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0     # GTK
+    sudo apt install python3-pyside2.qtcore python3-pyside2.qtgui \
+                     python3-pyside2.qtwidgets                     # or Qt
+
+or with pip: `pip install -r requirements-gtk.txt` (or
+`requirements-qt.txt`).
+
+For a printer on USB, your user needs to be in the `lp` group
+(`sudo usermod -aG lp $USER`, then log in again).
 
 ## Running it
 
     ./run.sh              # or: python3 tscmanager.py [--qt | --gtk]
 
-It needs Python 3.8 or later, Pillow, and PySide2 for the Qt window (see
-`requirements-qt.txt` for the apt packages).
+With no option it opens the GTK window when PyGObject is installed, and the
+Qt window otherwise.
 
 Type the printer's address (or choose USB and the printer) and press
 Connect. The window shows the model, firmware, resolution and free memory,
@@ -67,6 +86,12 @@ the files again.
 ## Tests
 
     tests/run.sh
+
+Every suite is a plain Python script. The Qt suites run offscreen; the GTK
+suite and the comparison of the two windows need a display, and run under
+`xvfb-run` (`sudo apt install xvfb`) so that their windows stay off your
+screen. A pretend printer (`tests/fake_printer.py`) answers the way the
+MB241 did, so no printer is needed.
 
 ## The manual
 
