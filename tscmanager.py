@@ -72,7 +72,7 @@ def probe_inquiries(host: str, port: int):
     print(f"   parsed: {tspl.info_from(model, None, {}).model!r}")
     free = show_reply("~!A free memory", tspl.FREE_MEMORY,
                       raw_exchange(host, port, tspl.FREE_MEMORY))
-    print(f"   parsed: {tspl.parse_number(free)!r} bytes")
+    print(f"   parsed: {tspl.parse_free(free)!r}  (KB per memory, or bytes)")
     listing = None
     for attempt in (1, 2):
         listing = show_reply(f"~!F file list (asking #{attempt})",
@@ -99,7 +99,7 @@ def probe_write(host: str, port: int) -> int:
     from tsccore.connection import Connection
     printer = Connection.network(host, port)
 
-    font = fonts.smallest_system_font()
+    font = fonts.probe_font()
     pattern = images.test_pattern()
     bmp = images.prepare(pattern, pattern.size, images.BMP_1BIT).data
     grey = images.gradient()
