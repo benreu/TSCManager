@@ -3,6 +3,9 @@
 TSC Manager - store, list, delete and test-print fonts and images on a TSC
 label printer, in TSC's own TSPL2.
 
+With no options it opens the window: GTK when that frontend and PyGObject
+are there, Qt otherwise; --qt or --gtk to choose.
+
 --probe asks a printer everything the app relies on and prints each raw
 reply next to what was made of it: the way to check a printer, or a
 firmware, against what the manual says.
@@ -12,6 +15,45 @@ import argparse
 import socket
 import sys
 import time
+
+QT_INSTALL = ("python3-pyside2.qtcore python3-pyside2.qtgui "
+              "python3-pyside2.qtwidgets  (or: pip install PySide2)")
+GTK_INSTALL = "python3-gi python3-gi-cairo gir1.2-gtk-3.0"
+
+
+def _have(module: str) -> bool:
+    """Whether a module can be imported, without importing it."""
+    import importlib.util
+    try:
+        return importlib.util.find_spec(module) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def choose_frontend(args) -> str:
+    """'qt' or 'gtk': as asked, else GTK when it and the GTK frontend are
+    there, else Qt - as LinuxZPL chooses."""
+    if args.qt:
+        return 'qt'
+    if args.gtk:
+        return 'gtk'
+    return 'gtk' if _have('gi') and _have('gtkui.window') else 'qt'
+
+
+def run_window(frontend: str) -> int:
+    if frontend == 'qt':
+        if not _have('PySide2'):
+            print(f"The Qt frontend needs PySide2: apt install {QT_INSTALL}",
+                  file=sys.stderr)
+            return 1
+        from qtui import main
+    else:
+        if not _have('gi'):
+            print(f"The GTK frontend needs PyGObject: apt install "
+                  f"{GTK_INSTALL}", file=sys.stderr)
+            return 1
+        from gtkui import main
+    return main() or 0
 
 
 def parse_host(text: str):
@@ -191,7 +233,12 @@ def probe(target: str, write: bool) -> int:
 def main() -> int:
     global WAIT
     parser = argparse.ArgumentParser(
-        description=__doc__.strip().split('\n')[0])
+        description=" ".join(__doc__.strip().split('\n\n')[0].split()))
+    toolkit = parser.add_mutually_exclusive_group()
+    toolkit.add_argument('--qt', action='store_true',
+                         help="open the Qt (PySide2) window")
+    toolkit.add_argument('--gtk', action='store_true',
+                         help="open the GTK 3 window")
     parser.add_argument('--probe', metavar='HOST[:PORT]',
                         help="ask a networked TSC printer (port 9100 unless "
                              "given) everything the app relies on, print the "
@@ -210,8 +257,7 @@ def main() -> int:
         return probe(args.probe, args.probe_write)
     if args.probe_write:
         parser.error("--probe-write needs --probe")
-    parser.print_help()
-    return 0
+    return run_window(choose_frontend(args))
 
 
 if __name__ == '__main__':
