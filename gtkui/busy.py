@@ -1,0 +1,164 @@
+"""
+A busy row - Gtk.Spinner plus Cancel - for the windows that talk to a
+printer, and the one way they run a printer call off the GTK main loop.
+The GTK twin of qtui/busy.py, with the same API and the same reasoning; see
+there for the why.
+
+Copied from LinuxZPL's gtkui/busy.py at commit 5e99b57, with
+firmware.progress_text taken from tsccore.manager instead.
+
+Completion and progress cross back to the main loop through GLib.idle_add,
+which is the one thread-safe door into GTK. Idle callbacks still run inside
+a dialog's nested run() loop, so this works from the modal printer dialogs
+as well as from the main window.
+"""
+
+import threading
+import time
+from typing import Callable, Optional, Sequence
+
+import gi
+gi.require_version('Gtk', '3.0')
+from gi.repository import GLib, Gtk
+
+from tsccore import manager, printer_io
+
+
+class BusyBar(Gtk.Box):
+    """Hidden until run() is called; visible, spinning and cancellable
+    until the call it started comes back.
+
+    `blocked` widgets are made insensitive while a call is out and restored
+    to whatever sensitivity they had before, not simply made sensitive - so
+    a Delete withheld for a read-only object stays withheld. `message`, if
+    given, is where report() lands. set_no_show_all keeps the row hidden
+    through the dialogs' own show_all().
+    """
+
+    def __init__(self, blocked: Sequence[Gtk.Widget] = (),
+                 message: Optional[Callable] = None, width: int = 160):
+        super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self._blocked = list(blocked)
+        self._message = message
+        self._token: Optional[printer_io.CancelToken] = None
+        self._was_sensitive = []
+        self._dead = False
+        self._on_done = None
+        self._started = 0.0
+        self._fraction: Optional[float] = None
+        self._ticker = None
+
+        self._spinner = Gtk.Spinner()
+        self.pack_start(self._spinner, False, False, 0)
+        self._cancel_btn = Gtk.Button(label="Cancel")
+        self._cancel_btn.connect("clicked", lambda _b: self.cancel())
+        self.pack_start(self._cancel_btn, False, False, 0)
+        self._bar = Gtk.ProgressBar(show_text=True, valign=Gtk.Align.CENTER)
+        self._bar.set_size_request(width, -1)
+        self.pack_start(self._bar, False, False, 0)
+        self._spinner.show()
+        self._cancel_btn.show()
+        self.set_no_show_all(True)
+        self.hide()
+
+    @property
+    def running(self) -> bool:
+        return self._token is not None
+
+    def run(self, fn: Callable, on_done: Callable) -> None:
+        """Run `fn(cancel)` on a worker thread; `on_done(result, error)` on
+        the main loop afterwards. `error` is None on success, the exception
+        otherwise - printer_io.Cancelled when Cancel was pressed, which
+        callers treat as "nothing happened" rather than as a failure. A
+        second run() while one is in flight is ignored.
+        """
+        if self._token is not None or self._dead:
+            return
+        self._token = printer_io.CancelToken()
+        self._was_sensitive = [w.get_sensitive() for w in self._blocked]
+        for w in self._blocked:
+            w.set_sensitive(False)
+        self._cancel_btn.set_sensitive(True)
+        self._started, self._fraction = time.monotonic(), None
+        # Keeps the elapsed time counting while a printer says nothing.
+        self._ticker = GLib.timeout_add_seconds(1, self._tick)
+        self._spinner.start()
+        self._spinner.show()
+        self._bar.hide()
+        self.show()
+        self._on_done = on_done
+        token = self._token
+
+        def work():
+            try:
+                result, error = fn(token), None
+            except Exception as e:
+                result, error = None, e
+            GLib.idle_add(self._finish, result, error)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def report(self, text: str) -> None:
+        """Thread-safe progress text, for a `fn` with more than one step."""
+        GLib.idle_add(self._show_message, text)
+
+    def report_fraction(self, fraction: float) -> None:
+        """Thread-safe: swap the spinner for a percentage bar, for a call that
+        knows how far along it is (an upload)."""
+        GLib.idle_add(self._show_fraction, fraction)
+
+    def cancel(self) -> None:
+        if self._token is not None:
+            self._cancel_btn.set_sensitive(False)
+            self._token.cancel()
+
+    def abandon(self) -> None:
+        """Cancel whatever is running and drop its result when it lands -
+        for a dialog being destroyed while a call is still out."""
+        self._dead = True
+        self._stop_ticker()
+        self.cancel()
+
+    def _finish(self, result, error) -> bool:
+        self._stop_ticker()
+        if not self._dead:
+            self._spinner.stop()
+            self.hide()
+            for w, sensitive in zip(self._blocked, self._was_sensitive):
+                w.set_sensitive(sensitive)
+            self._token = None
+            on_done, self._on_done = self._on_done, None
+            on_done(result, error)
+        return False  # one-shot idle callback
+
+    def _show_message(self, text: str) -> bool:
+        if self._message is not None and not self._dead:
+            self._message(text)
+        return False
+
+    def _stop_ticker(self) -> None:
+        if self._ticker is not None:
+            GLib.source_remove(self._ticker)
+            self._ticker = None
+
+    def _show_fraction(self, fraction: float) -> bool:
+        if not self._dead and self._token is not None:
+            self._fraction = fraction
+            self._spinner.stop()
+            self._spinner.hide()
+            self._bar.set_fraction(max(0.0, min(1.0, fraction)))
+            self._bar.show()
+            self._refresh_fraction()
+        return False
+
+    def _refresh_fraction(self) -> None:
+        if self._fraction is not None and self._token is not None:
+            self._bar.set_text(manager.progress_text(
+                self._fraction, time.monotonic() - self._started))
+
+    def _tick(self) -> bool:
+        self._refresh_fraction()
+        if self._token is None:
+            self._ticker = None
+            return False
+        return True
