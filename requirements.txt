@@ -1,0 +1,3 @@
+# The core. Neither GUI toolkit is needed to import tsccore, run the core
+# tests or use --probe; install one of the toolkits below to run the app.
+Pillow>=9.0.0
