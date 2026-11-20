@@ -69,3 +69,22 @@ def probe_font() -> Optional[str]:
     paths = [p for p in (common or [path for _f, path in known])
              if p.lower().endswith('.ttf') and os.path.isfile(p)]
     return min(paths, key=os.path.getsize) if paths else None
+
+
+def preview_image(path: str, text: str, pixels: int = 28):
+    """`text` drawn in the font file itself, black on white (mode 'L'), by
+    PIL rather than either toolkit, so the preview is that file and not
+    whatever fontconfig would put in its place. None if it cannot be read
+    as a font."""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        font = ImageFont.truetype(path, pixels)
+        left, top, right, bottom = font.getbbox(text)
+    except (OSError, ValueError, ImportError):
+        return None
+    pad = max(2, pixels // 6)
+    image = Image.new('L', (max(1, right - left) + 2 * pad,
+                            max(1, bottom - top) + 2 * pad), 255)
+    ImageDraw.Draw(image).text((pad - left, pad - top), text, font=font,
+                               fill=0)
+    return image
