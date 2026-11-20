@@ -62,6 +62,14 @@ check("its files are listed, with their kind",
       and window.files.topLevelItem(0).text(1) == 'Font'
       and window.files_status.text() == "1 file on the printer.")
 check("connecting saved the printer", settings.load_printer() == printer)
+check("only the network rows show",
+      window.rows.address_edit.isVisible()
+      and not window.rows.usb_combo.isVisible())
+window.rows.usb_radio.setChecked(True)
+check("choosing USB shows the USB row in their place",
+      window.rows.usb_combo.isVisible()
+      and not window.rows.address_edit.isVisible())
+window.rows.network_radio.setChecked(True)
 check("with nothing chosen: no Delete or Test Print; nothing in DRAM: no "
       "Move", window.buttons['upload_font'].isEnabled()
       and not window.buttons['delete'].isEnabled()
