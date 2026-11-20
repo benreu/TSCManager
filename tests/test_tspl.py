@@ -53,8 +53,13 @@ check("~!F: an empty list is just the 0x1A; CR LF and blanks are fine",
       tspl.parse_file_list(b'\x1a') == []
       and tspl.parse_file_list(b'A.TTF\r\n\r\nB.BMP\r\n\x1a') == ['A.TTF',
                                                                 'B.BMP'])
-check("~!A: the number in the reply", tspl.parse_number(b'1048576\r')
-      == 1048576 and tspl.parse_number(b'') is None)
+check("~!A as the MB241 answers it: KB free per memory",
+      tspl.parse_free(b'DRAM:8192\rFLASH:211710\r')
+      == ({tspl.DRAM: 8192, tspl.FLASH: 211710}, None))
+check("~!A as the manual has it: one number, in bytes",
+      tspl.parse_free(b'1048576\r') == ({}, 1048576)
+      and tspl.parse_free(b'') == ({}, None) and tspl.parse_free(None)
+      == ({}, None))
 reply = (b'model=TE210\r\nversion=V6.93 EZ\r\ndpi=203\r\n'
          b'dram_capacity=8000000\r\ndram_available=7000000\r\n'
          b'flash_capacity=4000000\r\nflash_available=\r\ncard_installed=0\r\n'
@@ -65,13 +70,38 @@ check("GETSETTING$ answers come back by tag, and a stray line is ignored",
       and 'junk line' not in settings and settings['flash_available'] == '')
 info = tspl.info_from(b'TE210\r', b'123\r', settings)
 check("Info: what was answered, None for what was not",
-      (info.model, info.version, info.dpi, info.free, info.card_installed)
-      == ('TE210', 'V6.93 EZ', 203, 123, False)
+      (info.model, info.version, info.dpi, info.free_bytes,
+       info.card_installed) == ('TE210', 'V6.93 EZ', 203, 123, False)
       and info.memory == {tspl.DRAM: (8000000, 7000000),
                           tspl.FLASH: (4000000, None)}, info)
 check("Info from old firmware (no OUT): ~!T's model and ~!A's free memory",
       tspl.info_from(b'TTP-244 Plus\r', b'500\r', {})
-      == tspl.Info(model='TTP-244 Plus', free=500))
+      == tspl.Info(model='TTP-244 Plus', free_bytes=500))
+check("Info without OUT but with a named ~!A: the free KB per memory",
+      tspl.info_from(None, b'DRAM:8192\rFLASH:211710\r', {}).memory
+      == {tspl.DRAM: (None, 8192), tspl.FLASH: (None, 211710)})
+
+# The MB241's own replies, byte for byte, from the probe on 2026-11-20.
+mb241_settings = tspl.parse_settings(
+    b'model=MB241\r\nversion=1.28.002\r\nserial=MB225230141\r\ndpi=203\r\n'
+    b'dram_capacity=8192\r\ndram_available=8175\r\nflash_capacity=212352\r\n'
+    b'flash_available=211706\r\ncard_installed=0\r\ncard_capacity=0\r\n'
+    b'card_available=0\r\n')
+mb241 = tspl.info_from(b'MB241', b'DRAM:8175\rFLASH:211706\r', mb241_settings)
+check("MB241: model, firmware, serial, dpi; DRAM and flash in KB; no card "
+      "listed when none is installed",
+      (mb241.model, mb241.version, mb241.serial, mb241.dpi,
+       mb241.card_installed) == ('MB241', '1.28.002', 'MB225230141', 203,
+                                 False)
+      and mb241.memory == {tspl.DRAM: (8192, 8175),
+                           tspl.FLASH: (212352, 211706)}, mb241)
+check("MB241: ~!F with files in DRAM and flash, and empty",
+      tspl.parse_file_list(b'PROBE.TTF\rPROBE.BMP\rprobe2.bmp\r'
+                           b'PROBELONGNAME.BMP\rPROBEG.BMP\rPROBE.PNG\r'
+                           b'PROBEF.BMP\r\x1a')
+      == ['PROBE.TTF', 'PROBE.BMP', 'probe2.bmp', 'PROBELONGNAME.BMP',
+          'PROBEG.BMP', 'PROBE.PNG', 'PROBEF.BMP']
+      and tspl.parse_file_list(b'\x1a') == [])
 check("the settings request tags each answer",
       b'OUT "dpi=";GETSETTING$("SYSTEM","INFORMATION","DPI")\r\n'
       in tspl.build_settings_request())
@@ -125,7 +155,7 @@ check("see-through parts print as paper, not black",
       set(images.flatten(clear).getdata()) == {255})
 
 # --- local fonts ------------------------------------------------------------
-font = fonts.smallest_system_font()
+font = fonts.probe_font()
 if font:
     check("family_for_file reads a TrueType file's family",
           bool(fonts.family_for_file(font)))
@@ -153,9 +183,10 @@ try:
           == ['Big.TTF', 'LOGO.BMP'])
     got = tspl.query_info(printer)
     check("query_info: model, firmware, dpi and memory from one printer",
-          got.model == 'TE210' and got.version == 'V6.93 EZ' and got.dpi == 203
-          and got.memory[tspl.FLASH] == (4000000, 4000000 - 50000)
-          and got.card_installed is False, got)
+          got.model == 'MB241' and got.version == '1.28.002' and got.dpi == 203
+          and got.memory[tspl.FLASH] == (212352, 212352 - 52)
+          and tspl.CARD not in got.memory and got.card_installed is False,
+          got)
     tspl.test_print(printer, 'Big.TTF')
     tspl.test_print(printer, 'LOGO.BMP', bpp=8)
     time.sleep(0.3)
@@ -169,10 +200,12 @@ try:
     time.sleep(0.3)
     check("MOVE: what was in DRAM is in flash",
           'LOGO.BMP' in fake.files['flash'] and not fake.files['dram'])
-    tspl.delete(printer, 'LOGO.BMP', (tspl.DRAM, tspl.FLASH))
+    tspl.delete(printer, 'LOGO.BMP')
     time.sleep(0.3)
-    check("delete: KILL from each memory given", tspl.list_files(printer)
-          == ['Big.TTF'])
+    check("delete: KILL from DRAM and flash, whichever holds it",
+          tspl.list_files(printer) == ['Big.TTF']
+          and 'KILL "LOGO.BMP"' in fake.received
+          and 'KILL F,"LOGO.BMP"' in fake.received)
 finally:
     fake.close()
 

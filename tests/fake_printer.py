@@ -4,9 +4,10 @@ manual describes it: enough for the tests to store, list, delete and print
 without a printer.
 
 It keeps its files per memory, and records every label it is asked to
-print. Where the manual is vague (how OUT frames its answer), it follows
-what tsccore.tspl expects; the probe against a real printer is what
-settles those.
+print. Its replies copy a TSC MB241's (firmware 1.28.002), as the probe
+recorded them on 2026-11-20: ~!F lists DRAM then flash with nothing to say
+which is which, ~!A gives a line per memory, and memory is counted in KB,
+a file taking whole 4 KB blocks.
 """
 
 import re
@@ -20,7 +21,7 @@ _MEMORY = {None: 'dram', b'F,': 'flash', b'E,': 'card'}
 
 
 class FakePrinter:
-    def __init__(self, model='TE210', version='V6.93 EZ', dpi=203,
+    def __init__(self, model='MB241', version='1.28.002', dpi=203,
                  card=False, answers=True):
         self.model, self.version, self.dpi = model, version, dpi
         self.card = card
@@ -120,10 +121,10 @@ class FakePrinter:
         with self._lock:
             self.received.append(command.decode('latin-1'))
             if command == b'~!T':
-                self._reply(conn, self.model.encode() + b'\r')
+                self._reply(conn, self.model.encode())   # no CR, as the MB241
             elif command == b'~!A':
-                self._reply(conn, str(4_000_000 - self._used()).encode()
-                            + b'\r')
+                self._reply(conn, f"DRAM:{self._available('DRAM')}\r"
+                            f"FLASH:{self._available('FLASH')}\r".encode())
             elif command == b'~!F':
                 names = b''.join(n.encode('latin-1') + b'\r'
                                  for memory in ('dram', 'flash', 'card')
@@ -132,23 +133,26 @@ class FakePrinter:
             elif command == b'\x1b!?':
                 self._reply(conn, b'\x00')
 
-    def _used(self):
-        return sum(len(d) for memory in self.files.values()
-                   for d in memory.values())
+    SIZES_KB = {'DRAM': 8192, 'FLASH': 212352, 'CARD': 0}
+
+    def _capacity(self, sec):
+        return 31000 if sec == 'CARD' and self.card else self.SIZES_KB[sec]
+
+    def _available(self, sec):
+        used = sum(-(-len(d) // 4096) * 4
+                   for d in self.files[sec.lower()].values())
+        return self._capacity(sec) - used
 
     def _setting(self, app, sec, key):
         if app == 'SYSTEM':
             return {'MODEL': self.model, 'VERSION': self.version,
                     'DPI': str(self.dpi), 'SERIAL': 'FAKE123'}.get(key, '')
-        sizes = {'DRAM': 8_000_000, 'FLASH': 4_000_000,
-                 'CARD': 32_000_000 if self.card else 0}
         if key == 'INSTALLED':
             return '1' if self.card else '0'
-        used = sum(len(d) for d in self.files[sec.lower()].values())
         if key == 'CAPACITY':
-            return str(sizes[sec])
+            return str(self._capacity(sec))
         if key == 'AVAILABLE':
-            return str(sizes[sec] - used)
+            return str(self._available(sec))
         return ''
 
     def _line(self, line: bytes, conn):

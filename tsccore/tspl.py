@@ -3,21 +3,32 @@ TSC's TSPL2 file commands: store, list, delete and test-print fonts and
 images in a printer's memory.
 
 From the TSPL/TSPL2 Programming Manual 3.0 (tspl_manual.pdf; the page
-numbers here are the manual's own). What the manual leaves open - the exact
-shape of ~!F's reply, how OUT frames an answer, which way round a BMP
-prints - is settled against a printer with `tscmanager.py --probe`, and the
-parsers here follow what the printer does.
+numbers here are the manual's own), checked with `tscmanager.py --probe`
+against a TSC MB241, firmware 1.28.002, on 2026-11-20. Where the two
+differ, the parsers follow the printer, and say so.
 
 - DOWNLOAD [n,]"NAME",size,data stores a file (p.150). n is nothing for
   DRAM, F for flash, E for a memory card. DRAM is lost at power off.
   File names are case sensitive.
+  The MB241 keeps lower case and names longer than 8.3 as given.
 - KILL [n,]"NAME" deletes one, with the same n; * is a wildcard (p.154).
+  A KILL for a file a memory does not hold does nothing.
 - MOVE copies what is in DRAM to flash (p.156).
 - ~!F lists the files: each name ends 0x0D, the list ends 0x1A (p.140).
+  It does not say which memory a file is in. The MB241 lists DRAM's files
+  first, then flash's, with nothing between them, and gives the whole list
+  every time (the manual says asking again "cycles through" the files).
   FILES is no use here: it prints the list on a label (p.153).
-- ~!A is the free memory in bytes (p.136), ~!T the model (p.142).
+- ~!A is the free memory (p.136). The manual says one number, in bytes;
+  the MB241 answers a line per memory in KB, "DRAM:8192\rFLASH:211710\r".
+- ~!T is the model (p.142).
 - OUT "";GETSETTING$(...) answers a setting back down the same port
-  (pp.215, 305); firmware V6.93 EZ and later.
+  (pp.215, 305); firmware V6.93 EZ and later. The MB241 answers each OUT
+  with the prompt, the value and CR LF. Capacity and space are in KB:
+  flash went down 4 KB for an 830-byte file.
+
+Every reply from the MB241 came within 0.2 s, in one piece, well inside the
+transport's 0.5 s of quiet that ends a reply.
 
 The printer has to be taking TSPL: on a TSC that is set to emulate ZPL,
 these are not understood. That is a printer setting, not sent from here.
@@ -132,9 +143,11 @@ def build_kill(name: str, memory: str = DRAM) -> bytes:
 
 
 def delete(printer: 'connection.Printer', name: str,
-           memories: Iterable[str] = (DRAM,), timeout: float = 10,
+           memories: Iterable[str] = (DRAM, FLASH), timeout: float = 10,
            cancel=None) -> None:
-    """KILL `name` from each of `memories`, in one send."""
+    """KILL `name` from each of `memories`, in one send. ~!F cannot say
+    which memory holds a file, so the app sends a KILL to every memory
+    there is (adding CARD when one is installed)."""
     payload = b''.join(build_kill(name, memory) for memory in memories)
     connection.send(printer, payload, timeout, cancel=cancel)
 
@@ -182,9 +195,8 @@ def parse_file_list(reply: bytes) -> List[str]:
 
 def list_files(printer: 'connection.Printer', timeout: float = 5,
                cancel=None) -> Optional[List[str]]:
-    """The names of the files in the printer's memory, or None if it did
-    not answer. An empty reply is an empty printer only if it carried the
-    0x1A that ends a list; silence is no answer."""
+    """The names of the files in the printer's memory, DRAM's first, or
+    None if it did not answer. A name in two memories is listed twice."""
     reply = _ask(printer, LIST_FILES, timeout, cancel)
     if not reply:
         return None
@@ -197,6 +209,21 @@ def parse_number(reply: bytes) -> Optional[int]:
     return int(found.group()) if found else None
 
 
+def parse_free(reply: bytes) -> Tuple[Dict[str, int], Optional[int]]:
+    """~!A's reply, as ({memory: KB free}, None) when it names each memory
+    as the MB241 does ("DRAM:8192\rFLASH:211710\r"), or ({}, bytes) for
+    the one number in bytes the manual describes."""
+    text = (reply or b'').decode('latin-1')
+    named = {}
+    for label, number in re.findall(r'([A-Za-z]+)\s*:\s*(\d+)', text):
+        memory = label.lower()
+        if memory in MEMORIES:
+            named[memory] = int(number)
+    if named:
+        return named, None
+    return {}, parse_number(reply)
+
+
 @dataclass
 class Info:
     """What a printer says about itself. Any field the printer did not
@@ -205,10 +232,12 @@ class Info:
     version: Optional[str] = None
     serial: Optional[str] = None
     dpi: Optional[int] = None
-    free: Optional[int] = None               # ~!A, bytes
+    # memory -> (capacity, available), in KB; a memory card only when one
+    # is installed.
     memory: Dict[str, Tuple[Optional[int], Optional[int]]] = field(
-        default_factory=dict)                 # memory -> (capacity, available)
+        default_factory=dict)
     card_installed: Optional[bool] = None
+    free_bytes: Optional[int] = None   # ~!A as the manual has it: one number
 
 
 # Each answer comes back behind a tag of our own, so a setting the firmware
@@ -259,12 +288,16 @@ def info_from(model_reply: Optional[bytes], free_reply: Optional[bytes],
     info.version = settings.get('version') or None
     info.serial = settings.get('serial') or None
     info.dpi = _int(settings.get('dpi'))
-    info.free = parse_number(free_reply) if free_reply else None
+    free_kb, info.free_bytes = parse_free(free_reply)
     installed = settings.get('card_installed')
     info.card_installed = None if installed is None else installed == '1'
     for memory in MEMORIES:
+        if memory == CARD and info.card_installed is False:
+            continue
         capacity = _int(settings.get(f'{memory}_capacity'))
         available = _int(settings.get(f'{memory}_available'))
+        if available is None:
+            available = free_kb.get(memory)
         if capacity is not None or available is not None:
             info.memory[memory] = (capacity, available)
     return info

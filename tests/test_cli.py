@@ -16,7 +16,7 @@ try:
     check("the probe runs to the end", run.returncode == 0,
           run.stderr[-800:])
     check("it shows ~!T's raw reply and what was parsed from it",
-          "b'TE210\\r'" in out and "parsed: 'TE210'" in out, out[:600])
+          "b'MB241'" in out and "parsed: 'MB241'" in out, out[:600])
     check("it shows the GETSETTING$ answers parsed by tag",
           "'dpi': '203'" in out)
     check("it stored every test file, in DRAM and in flash",

@@ -11,6 +11,9 @@ becomes one of:
 - a PNG (PUTPNG, firmware A2.12 or later), black and white like the 1-bit
   BMP but compressed, so it takes less of the printer's memory.
 
+All three printed right way up and black on white on a TSC MB241 (firmware
+1.28.002, a newer line than the manual's V6/A2 numbers) on 2026-11-20.
+
 Black and white is made either by dithering (a photo keeps its shading as a
 pattern of dots) or by a threshold (a logo or text stays crisp).
 
@@ -30,8 +33,9 @@ BMP_1BIT, BMP_8BIT, PNG = 'bmp1', 'bmp8', 'png'
 FORMATS = (
     (BMP_1BIT, "BMP, black and white", '.BMP', "any TSPL printer"),
     (BMP_8BIT, "BMP, grayscale", '.BMP',
-     "firmware V6.91 EZ or later, direct thermal"),
-    (PNG, "PNG, black and white", '.PNG', "firmware A2.12 or later"),
+     "newer printers only (firmware V6.91 EZ or later); direct thermal"),
+    (PNG, "PNG, black and white", '.PNG',
+     "newer printers only (firmware A2.12 or later)"),
 )
 EXTENSIONS = {fmt: extension for fmt, _label, extension, _needs in FORMATS}
 
