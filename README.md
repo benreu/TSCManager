@@ -3,7 +3,7 @@
 Store, list, delete and test-print fonts and images on a TSC label printer,
 in TSC's own printer language, TSPL2.
 
-It is a companion to [LinuxZPL](../LinuxZPL), kept apart from it so that
+It is a companion to [LinuxZPL](https://github.com/benreu/LinuxZPL), kept apart from it so that
 LinuxZPL stays a ZPL designer. The printer connection code (network and USB)
 was copied from LinuxZPL at commit 5e99b57.
 
